@@ -1,4 +1,7 @@
+import numpy
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def shift1(Y):
@@ -9,9 +12,10 @@ def shift1(Y):
     return shifted
 
 
-class LocalDiscriminator:
+class LocalDiscriminator(nn.Module):
     #  Concat-and-convolve architecture
     def __init__(self, conv_in, y_size):
+        super().__init__()
         self.relu = nn.ReLU()
         self.layer0 = nn.Linear(y_size, 2048)
         self.layer1 = nn.Linear(y_size, 2048)
@@ -30,28 +34,29 @@ class LocalDiscriminator:
         global_emb = F.normalize(g + linear)
        
         # we have scores from -1 to 1
-        prod = local_emb @ global_emb
+        prod = (global_emb.unsqueeze(1) @ local_emb.flatten(2))
         # move to [0, 1] range
         prod = (prod + 1) / 2
-        return prod.mean()
+        return prod
 
-    def forward(self, M, Y)
+    def forward(self, M, Y):
         real = self._forward(M, Y)
         shifted = shift1(Y)
         fake = self._forward(M, shifted)
         # drive real to 1
-        encoder_loss = - real
+        encoder_loss = (- real).mean()
         # discriminator
-        disc_loss = fake - real
+        disc_loss = (fake - real).mean()
         return dict(encoder_loss=encoder_loss,
                     discriminator_loss=disc_loss)
 
 
-class GlobalDiscriminatorFull:
+class GlobalDiscriminatorFull(nn.Module):
     # For the global mutual information objective, we first encode 
     # the input into a feature map, Cψ (x), which in this case is the output of the last convolutional layer. 
     # We then encode this representation further using linear layers as detailed above to get Eψ (x). Cψ (x) is then flattened, then concatenated with Eψ (x). We then pass this to a fully-connected network with two 512-unit hidden layers (see Table 6).
     def __init__(self, input_size):
+        super().__init__()
         # like in table 6
         self.relu = nn.ReLU()
         self.layer0 = nn.Linear(input_size, 512)
@@ -61,7 +66,7 @@ class GlobalDiscriminatorFull:
     def _forward(self, M, Y):
         # flatten M and concatenate, then pass through layers
         m1 = M.flatten(start_dim=1)
-        x = torch.cat([m1, Y])
+        x = torch.cat([m1, Y], dim=1)
         x = self.relu(self.layer0(x))
         x = self.relu(self.layer1(x))
         x = self.layer2(x)
@@ -73,19 +78,20 @@ class GlobalDiscriminatorFull:
         shifted = shift1(Y)
         fake = self._forward(M, shifted)
         # just optimize for real samples 
-        loss_encoder = - real
+        loss_encoder = (- real).mean()
         # discriminator should recognize both
         # minimum is when fake = 0 and real = 1
-        loss_disc = fake - real
-        return dict(loss_encoder=loss_encoder,
-                    loss_discriminator=loss_disc)
+        loss_disc = (fake - real).mean()
+        return dict(encoder_loss=loss_encoder,
+                    discriminator_loss=loss_disc)
 
 
-class InfoMax:
-   def __init__(self, feature_network, 
-                      aggregator_network, losses):
+class InfoMax(nn.Module):
+    def __init__(self, feature_network, 
+                      aggregator_network, *losses):
+        super().__init__()
         self.feature_network = feature_network
-        self.aggregator_network = agregator_network
+        self.aggregator_network = aggregator_network
         self.losses = losses
 
     def forward(self, batch):
@@ -97,7 +103,7 @@ class InfoMax:
         # compute global loss, local loss and other losses
 
         M = self.feature_network(batch)
-        Y = self.aggregator(M)
+        Y = self.aggregator_network(M)
         result = dict()
         for loss in self.losses:
             l = loss(M, Y)
