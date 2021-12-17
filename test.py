@@ -1,6 +1,6 @@
 import torch
 import cv2
-import imutils
+import util
 from transform import *
 import re
 import glob
@@ -18,17 +18,14 @@ print(pytorch_total_params)
 resnet34 = models.resnet34(pretrained=False)
 
 
-
-
-
 # 2000x2000 requires 3400mb with backpropagation on googlenet
 
 modules=list(resnet34.children())[:-2]
 resnet341 = torch.nn.Sequential(*modules)
 
 crop = RandomCropTransform(size=1000, beta=250)
-
-paths = glob.glob('*.tif') 
+dataset_path = "/mnt/fileserver/shared/references/Biology/Genetic Data"
+paths = glob.glob(dataset_path + '/*.tif')
 for path in paths:
     print('\n')
     print(path)
@@ -37,7 +34,7 @@ for path in paths:
     import pdb;pdb.set_trace()
     img = page2array(one_gb_image[1])
     img_crop = crop(img)
-    resized = imutils.resize(img_crop, width=1000)
+    resized = util.resize(img_crop, width=1000)
     cv2.imshow('crop', resized)
     cv2.waitKey()
 

@@ -1,11 +1,11 @@
 import torch
+from torch import optim
 import util
 from infomax import *
 from perceiver_pytorch import Perceiver
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import cv2
-import imutils
 from transform import *
 import re
 import glob
@@ -26,9 +26,9 @@ class AggregatorPerceiver(nn.Module):
             input_axis = 2,              # number of axis for input data (2 for images, 3 for video)
             num_freq_bands = 6,          # number of freq bands, with original value (2 * K + 1)
             max_freq = 10.,              # maximum frequency, hyperparameter depending on how fine the data is
-            depth = 6,                   # depth of net. The shape of the final attention mechanism will be:
+            depth = 3,                   # depth of net. The shape of the final attention mechanism will be:
                                          #   depth * (cross attention -> self_per_cross_attn * self attention)
-            num_latents = 256,           # number of latents, or induced set points, or centroids. different papers giving it different names
+            num_latents = 16,           # number of latents, or induced set points, or centroids. different papers giving it different names
             latent_dim = 512,            # latent dimension
             cross_heads = 1,             # number of heads for cross attention. paper said 1
             latent_heads = 8,            # number of heads for latent self attention, 8
@@ -47,33 +47,9 @@ class AggregatorPerceiver(nn.Module):
         return res
 
 
-def main():
-    epochs = 30
-    resnet34 = models.resnet34(pretrained=False)
-    modules=list(resnet34.children())[:-2]
-
-    # extracts local features
-    resnet341 = torch.nn.Sequential(*modules)
-    aggregator = AggregatorPerceiver()
-    size_global_inp = 512 + 512 * 16 * 16
-    global_loss = GlobalDiscriminatorFull(size_global_inp)
-    local_loss = LocalDiscriminator(512, 512)
-
-    opt_encoder = optim.Adam([{'params': resnet341.parameters()},
-                              {'params': aggregator.parameters()}], lr=0.0001) 
-
-    opt_discriminator = optim.Adam([{'params': global_loss.parameters()},
-                                    {'params': local_loss.parameters()}], lr=0.0001)
-    optimizers = dict(encoder_loss=opt_encoder,
-                      discriminator_loss=opt_discriminator)                      
-
-    infomax = InfoMax(resnet341,
-                      aggregator,
-                      global_loss,
-                      local_loss)
-    n_items = 30
-    batch_size = 3
-    tifs_path = glob.glob('*.tif')
+def tif_dataset():
+    dataset_path = "/mnt/fileserver/shared/references/Biology/Genetic Data"
+    tifs_path = glob.glob(dataset_path + '/*.tif')
     crop_size = 500
     crop = RandomCropTransform(size=crop_size, beta=crop_size // 4)
     def resize(img):
@@ -86,24 +62,78 @@ def main():
     def permute(img):
         return numpy.moveaxis(img, (0, 1, 2), (1, 2, 0))
 
-    transform = lambda img: permute(resize(crop(img)))
+    transform = lambda img: permute(resize(crop(img))) / 255.
 
     dataset = LargeTifDataset(n_items, tifs_path, transform)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+    return dataset
 
+
+def tiny_imagenet():
+    dataset_path = "../tiny-imagenet-200/train/"
+    dataset = TinyImageNet(dataset_path)
+    return dataset
+
+
+def main():
+    epochs = 30
+    n_items = 30
+    batch_size = 55
+
+    resnet34 = models.resnet34(pretrained=False)
+    modules=list(resnet34.children())[:-2]
+
+    # extracts local features
+    resnet341 = torch.nn.Sequential(*modules)
+    aggregator = AggregatorPerceiver()
+    feature_map_size = 16 * 16
+    feature_map_size = 2 * 2
+    size_global_inp = 512 + 512 * feature_map_size
+    global_loss = GlobalDiscriminatorFull(size_global_inp)
+    local_loss = LocalDiscriminator(512, 512)
+
+    opt_encoder = optim.AdamW([{'params': resnet341.parameters()},
+                               {'params': aggregator.parameters()}], lr=0.00001)
+
+    opt_global_discriminator = optim.AdamW(global_loss.parameters(), lr=0.0001)
+    opt_local_discriminator = optim.RMSprop(local_loss.parameters(), lr=0.0001)
+
+    infomax = InfoMax(resnet341,
+                      aggregator,
+                      global_loss,
+                      local_loss)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    infomax.to(device)
+    global_loss.to(device)
+    local_loss.to(device)
+    infomax.train()
+
+    dataset = tiny_imagenet()
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
     for epoch in range(epochs):
         for batch in loader:
-            loss = infomax(batch / 255.)
-            for opt in optimizers.values():
-                opt.zero_grad()
-            for k, l in loss.items():
-                # we need to backpropagate few times
-                l.backward(retain_graph=True)
-            for opt in optimizers:
-                opt.step()
+            loss = infomax(batch.to(device))
+            # optimize model with respect to global discriminator
+            infomax.zero_grad()
+            opt_encoder.zero_grad()
+            loss['global_encoder_loss'].backward(retain_graph=True)
+            print('global encoder loss', loss['global_encoder_loss'].item())
+            # optimize resnet + encoder
+            opt_encoder.step()
+
+            # optimize global discriminator
+            infomax.zero_grad()
+            opt_global_discriminator.zero_grad()
+            loss['global_discriminator_loss'].backward(inputs=list(global_loss.parameters()))
+            print('global discriminator loss', loss['global_discriminator_loss'].item())
+            # optimize discriminator
+            opt_global_discriminator.step()
+
+            print('global fake/real {0}/{1}'.format(loss['global_fake'], loss['global_real']))
+            # optimize model with respect to local discriminator
+
         dataset.reset()
 
 if __name__ == '__main__':
    main()
-

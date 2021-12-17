@@ -1,10 +1,12 @@
 import numpy
+import cv2
+import os
 import re
 import tiffile
 from torch.utils.data import Dataset
 
 
-def page2array(page):   
+def page2array(page):
     data = page.asarray()
     data = numpy.array(data)
     return data
@@ -37,7 +39,7 @@ class LargeTifDataset(Dataset):
         item = self.current[i]
         if self.transform is not None:
             return self.transform(item)
-        return item 
+        return item
 
     def reset(self):
         self.current = []
@@ -54,7 +56,7 @@ class LargeTifDataset(Dataset):
 
 def load_tif(path):
     tif = tiffile.TiffFile(path)
-    
+
     biggest = None
     b_size = 0
     result = []
@@ -72,5 +74,26 @@ def load_tif(path):
            result.append(((size, float(mag)), page))
     result.sort()
     return result
+
+
+class TinyImageNet(Dataset):
+    def __init__(self, path):
+        super().__init__()
+        class_dirs = os.listdir(path)
+        self.files = []
+
+        for d in class_dirs:
+            dir_path = os.path.join(path, d, 'images')
+            for f in os.listdir(dir_path):
+                self.files.append(os.path.join(dir_path, f))
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, idx):
+        img = cv2.imread(self.files[idx])
+        img = numpy.moveaxis(img, (0, 1, 2), (1, 2, 0))
+        img = img / 255.0
+        return img
 
 
