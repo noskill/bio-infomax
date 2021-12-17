@@ -59,6 +59,14 @@ def main():
     global_loss = GlobalDiscriminatorFull(size_global_inp)
     local_loss = LocalDiscriminator(512, 512)
 
+    opt_encoder = optim.Adam([{'params': resnet341.parameters()},
+                              {'params': aggregator.parameters()}], lr=0.0001) 
+
+    opt_discriminator = optim.Adam([{'params': global_loss.parameters()},
+                                    {'params': local_loss.parameters()}], lr=0.0001)
+    optimizers = dict(encoder_loss=opt_encoder,
+                      discriminator_loss=opt_discriminator)                      
+
     infomax = InfoMax(resnet341,
                       aggregator,
                       global_loss,
@@ -83,11 +91,12 @@ def main():
     dataset = LargeTifDataset(n_items, tifs_path, transform)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
+
     for epoch in range(epochs):
         for batch in loader:
             loss = infomax(batch / 255.)
-            #for opt in optimizers:
-            #    opt.zero_grad()
+            for opt in optimizers.values():
+                opt.zero_grad()
             for k, l in loss.items():
                 # we need to backpropagate few times
                 l.backward(retain_graph=True)
@@ -97,3 +106,4 @@ def main():
 
 if __name__ == '__main__':
    main()
+

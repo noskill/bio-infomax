@@ -19,26 +19,7 @@ resnet34 = models.resnet34(pretrained=False)
 
 
 
-def load_tif(path):
-    tif = tiffile.TiffFile(path)
-    
-    biggest = None
-    b_size = 0
-    result = []
-    for page in tif.pages:
-        size = page.size / 1e6
-        if b_size < size:
-            b_size = size
-            biggest = page
-        num = '(\d+\.?\d*)'
-        parse = re.match('level={0}\smag={0}\squality={0}'.format(num), page.description)
-        if parse is None:
-            continue
-        else:
-           mag = parse.group(2)
-           result.append(((size, float(mag)), page))
-    result.sort()
-    return result
+
 
 # 2000x2000 requires 3400mb with backpropagation on googlenet
 
