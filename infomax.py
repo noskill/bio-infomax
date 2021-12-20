@@ -43,7 +43,7 @@ class LocalDiscriminator(nn.Module):
         real = self._forward(M, Y)
         shifted = shift1(Y)
         fake = self._forward(M, shifted)
-        eps = 0.000
+        eps = 0.000001
         # drive real to 1
         encoder_loss = - torch.log(real + eps).mean()
 

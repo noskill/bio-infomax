@@ -75,8 +75,9 @@ def tiny_imagenet():
 
 
 def main():
-    epochs = 30
+    epochs = 10
     n_items = 30
+    snapshot_path = 'infomax.pt'
     batch_size = 55
 
     resnet34 = models.resnet34(pretrained=False)
@@ -94,8 +95,8 @@ def main():
     opt_encoder = optim.AdamW([{'params': resnet341.parameters()},
                                {'params': aggregator.parameters()}], lr=0.00001)
 
-    opt_global_discriminator = optim.AdamW(global_loss.parameters(), lr=0.0001)
-    opt_local_discriminator = optim.RMSprop(local_loss.parameters(), lr=0.0001)
+    opt_global_discriminator = optim.AdamW(global_loss.parameters(), lr=0.00001)
+    opt_local_discriminator = optim.AdamW(local_loss.parameters(), lr=0.00001)
 
     infomax = InfoMax(resnet341,
                       aggregator,
@@ -114,27 +115,23 @@ def main():
     average = dict()
     t = 0
     for epoch in range(epochs):
+        print('STARTING EPOCH ', epoch + 1)
         for i, batch in enumerate(loader):
             loss = infomax(batch.to(device))
-            util.update_average(average, t, {k: v.detach().item() for (k, v) in loss.items()})
             t += 1
             t = min(t, 100)
-            if i % 20 == 0:
-                print()
-                print(average)
-                print()
-
 
             # optimize resnet + encoder
             infomax.zero_grad()
             opt_encoder.zero_grad()
-            # optimize model with respect to global discriminator
-            loss['global_encoder_loss'].backward(inputs=param_encoder, retain_graph=True)
             # optimize model with respect to local discriminator
             loss['local_encoder_loss'].backward(inputs=param_encoder, retain_graph=True)
+            loss['grad_resnet_l'] = resnet341[0].weight.grad.abs().max()
 
+            # optimize model with respect to global discriminator
+            loss['global_encoder_loss'].backward(inputs=param_encoder, retain_graph=True)
+            loss['grad_resnet_g'] = resnet341[0].weight.grad.abs().max()
             opt_encoder.step()
-
 
 
             # optimize global discriminator
@@ -142,13 +139,32 @@ def main():
             opt_global_discriminator.zero_grad()
             loss['global_discriminator_loss'].backward(inputs=list(global_loss.parameters()),
                     retain_graph=True)
+            loss['grad_global_disc'] = global_loss.layer0.weight.grad.abs().max()
             opt_global_discriminator.step()
 
             # optimize local discriminator
             infomax.zero_grad()
             opt_local_discriminator.zero_grad()
             loss['local_discriminator_loss'].backward(inputs=list(local_loss.parameters()))
+            loss['grad_local_disc'] = local_loss.layer0.weight.grad.abs().max()
             opt_local_discriminator.step()
+
+            util.update_average(average, t, {k: v.detach().item() for (k, v) in loss.items()})
+
+            if i % 20 == 0:
+                print()
+                print('batch ', i)
+                print(average)
+                print()
+
+
+            if i and i % 200 == 0:
+                state_dict = {'resnet': resnet341.state_dict(),
+                                  'aggregator': aggregator.state_dict(),
+                                  'discriminator_local': local_loss.state_dict(),
+                                  'discriminator_global': global_loss.state_dict()}
+                # save
+                torch.save(state_dict, snapshot_path)
 
 #        dataset.reset()
 
