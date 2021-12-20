@@ -110,30 +110,47 @@ def main():
 
     dataset = tiny_imagenet()
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-
+    param_encoder = list(resnet341.parameters()) + list(aggregator.parameters())
+    average = dict()
+    t = 0
     for epoch in range(epochs):
-        for batch in loader:
+        for i, batch in enumerate(loader):
             loss = infomax(batch.to(device))
-            # optimize model with respect to global discriminator
+            util.update_average(average, t, {k: v.detach().item() for (k, v) in loss.items()})
+            t += 1
+            t = min(t, 100)
+            if i % 20 == 0:
+                print()
+                print(average)
+                print()
+
+
+            # optimize resnet + encoder
             infomax.zero_grad()
             opt_encoder.zero_grad()
-            loss['global_encoder_loss'].backward(retain_graph=True)
-            print('global encoder loss', loss['global_encoder_loss'].item())
-            # optimize resnet + encoder
+            # optimize model with respect to global discriminator
+            loss['global_encoder_loss'].backward(inputs=param_encoder, retain_graph=True)
+            # optimize model with respect to local discriminator
+            loss['local_encoder_loss'].backward(inputs=param_encoder, retain_graph=True)
+
             opt_encoder.step()
+
+
 
             # optimize global discriminator
             infomax.zero_grad()
             opt_global_discriminator.zero_grad()
-            loss['global_discriminator_loss'].backward(inputs=list(global_loss.parameters()))
-            print('global discriminator loss', loss['global_discriminator_loss'].item())
-            # optimize discriminator
+            loss['global_discriminator_loss'].backward(inputs=list(global_loss.parameters()),
+                    retain_graph=True)
             opt_global_discriminator.step()
 
-            print('global fake/real {0}/{1}'.format(loss['global_fake'], loss['global_real']))
-            # optimize model with respect to local discriminator
+            # optimize local discriminator
+            infomax.zero_grad()
+            opt_local_discriminator.zero_grad()
+            loss['local_discriminator_loss'].backward(inputs=list(local_loss.parameters()))
+            opt_local_discriminator.step()
 
-        dataset.reset()
+#        dataset.reset()
 
 if __name__ == '__main__':
    main()

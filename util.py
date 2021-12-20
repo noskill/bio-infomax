@@ -2,7 +2,6 @@ import cv2
 
 
 # adapted from https://github.com/PyImageSearch/imutils
-
 def resize(image, width=None, height=None, inter=cv2.INTER_AREA):
     # initialize the dimensions of the image to be resized and
     # grab the image size
@@ -33,4 +32,18 @@ def resize(image, width=None, height=None, inter=cv2.INTER_AREA):
 
     # return the resized image
     return resized
+
+
+# https://www.heikohoffmann.de/htmlthesis/node134.html
+def iterative_mean(mean, t, x):
+    return mean + 1 / (t + 1) * (x - mean)
+
+
+def update_average(result, t, new):
+    for k, v in new.items():
+        mean = 0
+        if k in result:
+            mean = result[k]
+        result[k] = iterative_mean(mean, t, v)
+    return result
 
