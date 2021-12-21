@@ -128,5 +128,5 @@ class InfoMax(nn.Module):
                     result[k] += v
                 else:
                     result[k] = v
-        return result
+        return result, Y
 

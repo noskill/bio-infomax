@@ -7,6 +7,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import cv2
 from transform import *
+from tiny import *
 import re
 import glob
 import torchvision.models as models
@@ -69,8 +70,8 @@ def tif_dataset():
 
 
 def tiny_imagenet():
-    dataset_path = "../tiny-imagenet-200/train/"
-    dataset = TinyImageNet(dataset_path)
+    dataset_path = "../tiny-imagenet-200/"
+    dataset = TinyImageNet(dataset_path, SETType.TRAIN)
     return dataset
 
 
@@ -98,26 +99,49 @@ def main():
     opt_global_discriminator = optim.AdamW(global_loss.parameters(), lr=0.00001)
     opt_local_discriminator = optim.AdamW(local_loss.parameters(), lr=0.00001)
 
+    tiny_class = TinyClass(512, 200)
+    tiny_opt = optim.AdamW(tiny_class.parameters(), lr=0.00001)
+
     infomax = InfoMax(resnet341,
                       aggregator,
                       global_loss,
                       local_loss)
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+
+    device = 'cpu'
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    if os.path.exists(snapshot_path):
+        print('loading from ', snapshot_path)
+        state_dict = torch.load(snapshot_path, map_location=device)
+        resnet341.load_state_dict(state_dict['resnet'])
+        aggregator.load_state_dict(state_dict['aggregator'])
+
+    if os.path.exists('tiny.pt'):
+        tiny_class.load_state_dict(torch.load('tiny.pt'))
+    tiny_class.to(device)
     infomax.to(device)
     global_loss.to(device)
     local_loss.to(device)
     infomax.train()
 
     dataset = tiny_imagenet()
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     param_encoder = list(resnet341.parameters()) + list(aggregator.parameters())
     average = dict()
     t = 0
     for epoch in range(epochs):
         print('STARTING EPOCH ', epoch + 1)
         for i, batch in enumerate(loader):
-            loss = infomax(batch.to(device))
+            data, labels = batch
+            loss, features = infomax(data.to(device))
+            label_est = tiny_class(features)
+            tiny_loss = - label_est[torch.arange(len(labels)), labels].mean()
+            loss['tiny_loss'] = tiny_loss
+            loss['tiny_acc'] = (torch.argmax(label_est, dim=1).to(labels) == labels).float().mean()
+            tiny_opt.zero_grad()
+            tiny_loss.backward(inputs=list(tiny_class.parameters()))
+            tiny_opt.step()
+
             t += 1
             t = min(t, 100)
 
@@ -165,6 +189,7 @@ def main():
                                   'discriminator_global': global_loss.state_dict()}
                 # save
                 torch.save(state_dict, snapshot_path)
+                torch.save(tiny_class.state_dict(), 'tiny.pt')
 
 #        dataset.reset()
 

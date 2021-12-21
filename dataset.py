@@ -1,4 +1,5 @@
 import numpy
+import enum
 import cv2
 import os
 import re
@@ -77,13 +78,17 @@ def load_tif(path):
 
 
 class TinyImageNet(Dataset):
-    def __init__(self, path):
+    def __init__(self, path, stype):
         super().__init__()
-        class_dirs = os.listdir(path)
+        dpath = os.path.join(path, stype.name.lower())
+        self.ids = dict()
+        for i, line in enumerate(open(os.path.join(path, 'wnids.txt'), 'rt').readlines()):
+            self.ids[line.strip()] = i
+        class_dirs = os.listdir(dpath)
         self.files = []
 
         for d in class_dirs:
-            dir_path = os.path.join(path, d, 'images')
+            dir_path = os.path.join(dpath, d, 'images')
             for f in os.listdir(dir_path):
                 self.files.append(os.path.join(dir_path, f))
 
@@ -91,9 +96,15 @@ class TinyImageNet(Dataset):
         return len(self.files)
 
     def __getitem__(self, idx):
+        label = self.ids[self.files[idx].split('/')[-1].split('.')[0].split('_')[0]]
         img = cv2.imread(self.files[idx])
         img = numpy.moveaxis(img, (0, 1, 2), (1, 2, 0))
         img = img / 255.0
-        return img
+        return img, label
 
+
+class SETType(enum.Enum):
+    TRAIN = 1
+    TEST = 2
+    VAL = 3
 
