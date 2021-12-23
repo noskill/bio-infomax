@@ -43,7 +43,7 @@ def tiny_imagenet():
 
 
 def main():
-    epochs = 10
+    epochs = 15
     n_items = 30
     snapshot_path = 'infomax.pt'
     batch_size = 55
@@ -53,8 +53,8 @@ def main():
 
     # extracts local features
     resnet341 = torch.nn.Sequential(*modules)
-    aggregator = AggregatorPerceiver()
     aggregator = AggFlat(256 * 4 * 4, 512)
+    prior_disc = PriorDiscriminator(512)
     feature_map_size = 16 * 16
     feature_map_size = 4 * 4
     size_global_inp = 512 + 256 * feature_map_size
@@ -66,14 +66,16 @@ def main():
 
     opt_global_discriminator = optim.RMSprop(global_loss.parameters(), lr=0.00005)
     opt_local_discriminator = optim.RMSprop(local_loss.parameters(), lr=0.00005)
+    opt_prior_discriminator = optim.RMSprop(prior_disc.parameters(), lr=0.00005)
 
     tiny_class = TinyClass(512, 200)
-    tiny_opt = optim.RMSprop(tiny_class.parameters(), lr=0.001)
+    tiny_opt = optim.Adam(tiny_class.parameters(), lr=0.001)
 
     infomax = InfoMax(resnet341,
                       aggregator,
                       global_loss,
-                      local_loss)
+                      local_loss,
+                      prior_disc)
 
 
     device = 'cpu'
@@ -85,12 +87,14 @@ def main():
         aggregator.load_state_dict(state_dict['aggregator'])
         local_loss.load_state_dict(state_dict['discriminator_local'])
         global_loss.load_state_dict(state_dict['discriminator_global'])
+        prior_disc.load_state_dict(state_dict['discriminator_prior'])
     if os.path.exists('tiny.pt'):
         tiny_class.load_state_dict(torch.load('tiny.pt'))
     tiny_class.to(device)
     infomax.to(device)
     global_loss.to(device)
     local_loss.to(device)
+    prior_disc.to(device)
     infomax.train()
 
     dataset = tiny_imagenet()
@@ -129,9 +133,13 @@ def main():
             # optimize model with respect to global discriminator
             loss['global_encoder_loss'].backward(inputs=param_encoder, retain_graph=True)
             loss['grad_resnet_g'] = resnet341[0].weight.grad.abs().max()
+
+            # optimize model with respect to prior discriminator
+            loss['prior_encoder_loss'].backward(inputs=param_encoder, retain_graph=True)
+            loss['grad_resnet_p'] = resnet341[0].weight.grad.abs().max()
             opt_encoder.step()
 
-          #  # optimize global discriminator
+            # optimize global discriminator
             infomax.zero_grad()
             opt_global_discriminator.zero_grad()
             loss['global_discriminator_loss'].backward(inputs=list(global_loss.parameters()),
@@ -145,6 +153,11 @@ def main():
             loss['local_discriminator_loss'].backward(inputs=list(local_loss.parameters()))
             loss['grad_local_disc'] = local_loss.layer0.weight.grad.abs().max()
             opt_local_discriminator.step()
+
+            # optimize prior discriminator
+            opt_prior_discriminator.zero_grad()
+            loss['prior_discriminator_loss'].backward(inputs=list(prior_disc.parameters()))
+            opt_prior_discriminator.step()
 
             util.update_average(average, t, {k: v.detach().item() for (k, v) in loss.items()})
 
@@ -160,7 +173,9 @@ def main():
                 state_dict = {'resnet': resnet341.state_dict(),
                                'aggregator': aggregator.state_dict(),
                                'discriminator_local': local_loss.state_dict(),
-                               'discriminator_global': global_loss.state_dict()}
+                               'discriminator_global': global_loss.state_dict(),
+                               'discriminator_prior':  prior_disc.state_dict(),
+                               }
                 # save
                 torch.save(state_dict, snapshot_path)
                 torch.save(tiny_class.state_dict(), 'tiny.pt')
