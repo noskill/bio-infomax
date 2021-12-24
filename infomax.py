@@ -43,12 +43,79 @@ class LocalDiscriminator(nn.Module):
         real = self._forward(M, Y)
         shifted = shift1(Y)
         fake = self._forward(M, shifted)
+        eps = 0.000001
         # drive real to 1
-        encoder_loss = (- real).mean()
+        encoder_loss = - torch.log(real + eps).mean()
 
         # discriminator
         # drive fake to zero and real to 1
-        disc_loss = (fake - real).mean()
+        disc_loss = - torch.log(1 - fake + eps).mean() + encoder_loss
+        return dict(local_encoder_loss=encoder_loss,
+                    local_real=real.mean(),
+                    local_fake=fake.mean(),
+                    local_discriminator_loss=disc_loss)
+
+
+class PriorDiscriminator(nn.Module):
+    def __init__(self, y_size):
+        super().__init__()
+        # small fully connected network
+        mid = 2048
+        self.layer0 = nn.Linear(y_size, mid)
+        self.bn0 = nn.BatchNorm1d(mid)
+        self.layer1 = nn.Linear(mid, mid)
+        self.bn1 = nn.BatchNorm1d(mid)
+        self.layer2 = nn.Linear(mid, 1)
+        self.relu = nn.LeakyReLU()
+
+    def _forward(self, x):
+        x = self.relu(self.bn0(self.layer0(x)))
+        x = self.relu(self.bn1(self.layer1(x)))
+        x = self.layer2(x)
+        return torch.sigmoid(x)
+
+    def forward(self, M, Y):
+        empirical = self._forward(Y)
+        # now sample prior distribution
+        prior_x = torch.normal(torch.zeros_like(Y), torch.ones_like(Y))
+        prior = self._forward(prior_x)
+        eps = 0.000001
+        # that's for encoder only!
+        encoder_loss = - torch.log(empirical + eps).mean()
+        # discriptor should classify empirical as fake
+        disc_loss = - torch.log(1 - empirical + eps).mean() - torch.log(prior + eps).mean()
+        return dict(prior_encoder_loss=encoder_loss,
+                    prior_emp=empirical.mean(),
+                    prior_fake=prior.mean(),
+                    prior_discriminator_loss=disc_loss)
+
+
+class LocalDiscriminatorConv(nn.Module):
+    # We used a1×1convnet with two512-unit hidden layers as discriminator
+    def __init__(self, conv_in, y_size):
+        super().__init__()
+        self.activation = nn.ReLU()
+        mid = 512
+        self.layer0 = nn.Conv2d(conv_in + y_size, mid, 1, 1)
+        self.conv2 = nn.Conv2d(mid, mid, 1, 1)
+        self.conv3 = nn.Conv2d(mid, 1, 1, 1)
+
+    def _forward(self, M, Y):
+        Y = torch.repeat_interleave(Y.unsqueeze(2), M.shape[2], dim=2)
+        Y = torch.repeat_interleave(Y.unsqueeze(3), M.shape[3], dim=3)
+        x = torch.cat([M, Y], dim=1)
+        x = self.activation(self.layer0(x))
+        x = self.activation(self.conv2(x))
+        x = torch.sigmoid(self.conv3(x))
+        return x
+
+    def forward(self, M, Y):
+        real = self._forward(M, Y)
+        shifted = shift1(Y)
+        fake = self._forward(M, shifted)
+        eps = 0.000001
+        encoder_loss = - torch.log(real + eps).mean()
+        disc_loss = - torch.log(1 - fake + eps).mean() + encoder_loss
         return dict(local_encoder_loss=encoder_loss,
                     local_real=real.mean(),
                     local_fake=fake.mean(),
@@ -127,5 +194,5 @@ class InfoMax(nn.Module):
                     result[k] += v
                 else:
                     result[k] = v
-        return result
+        return result, Y
 
