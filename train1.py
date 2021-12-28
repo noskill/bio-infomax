@@ -1,4 +1,5 @@
 import torch
+from optimize import *
 from torch import optim
 import util
 from infomax import *
@@ -43,10 +44,11 @@ def tiny_imagenet():
 
 
 def main():
-    epochs = 15
+    epochs = 25
     n_items = 30
     snapshot_path = 'infomax.pt'
     batch_size = 55
+    only_class = False
 
     resnet34 = models.resnet18(pretrained=False)
     modules=list(resnet34.children())[:-3]
@@ -61,21 +63,21 @@ def main():
     global_loss = GlobalDiscriminatorFull(size_global_inp)
     local_loss = LocalDiscriminatorConv(256, 512)
 
-    opt_encoder = optim.RMSprop([{'params': resnet341.parameters()},
-                               {'params': aggregator.parameters()}], lr=0.0001)
+    opt_encoder = optim.Adam([{'params': resnet341.parameters()},
+                               {'params': aggregator.parameters()}], lr=0.001)
 
     opt_global_discriminator = optim.RMSprop(global_loss.parameters(), lr=0.00005)
     opt_local_discriminator = optim.RMSprop(local_loss.parameters(), lr=0.00005)
     opt_prior_discriminator = optim.RMSprop(prior_disc.parameters(), lr=0.00005)
 
-    tiny_class = TinyClass(512, 200)
+    tiny_class = TinyConv(256, 200)
     tiny_opt = optim.Adam(tiny_class.parameters(), lr=0.001)
 
     infomax = InfoMax(resnet341,
                       aggregator,
-                      global_loss,
-                      local_loss,
-                      prior_disc)
+                      dict(global_loss=global_loss,
+                        local_loss=local_loss,
+                        prior_loss=prior_disc))
 
 
     device = 'cpu'
@@ -104,16 +106,20 @@ def main():
     t = 0
     for epoch in range(epochs):
         print('STARTING EPOCH ', epoch + 1)
+        if epoch:
+            import pdb;pdb.set_trace()
         for i, batch in enumerate(loader):
             data, labels = batch
-            loss, features = infomax(data.to(device))
-            label_est = tiny_class(features)
+            loss, M, Y = infomax(data.to(device))
+            label_est = tiny_class(M)
             tiny_loss = - label_est[torch.arange(len(labels)), labels].mean()
             loss['tiny_loss'] = tiny_loss
             loss['tiny_acc'] = (torch.argmax(label_est, dim=1).to(labels) == labels).float().mean()
 
             if epoch == 0 and i == 0:
                 print({k: v.item() for k, v in loss.items()})
+
+            optimize2(loss, infomax, opt_encoder, opt_global_discriminator, opt_local_discriminator, opt_prior_discriminator)
 
             # optimize supervised classifier
             tiny_opt.zero_grad()
@@ -123,45 +129,10 @@ def main():
             t += 1
             t = min(t, 100)
 
-            # optimize resnet + encoder
-            infomax.zero_grad()
-            opt_encoder.zero_grad()
-            # optimize model with respect to local discriminator
-            loss['local_encoder_loss'].backward(inputs=param_encoder, retain_graph=True)
-            loss['grad_resnet_l'] = resnet341[0].weight.grad.abs().max()
+            if not only_class:
+               util.update_average(average, t, {k: v.detach().item() for (k, v) in loss.items()})
 
-            # optimize model with respect to global discriminator
-            loss['global_encoder_loss'].backward(inputs=param_encoder, retain_graph=True)
-            loss['grad_resnet_g'] = resnet341[0].weight.grad.abs().max()
-
-            # optimize model with respect to prior discriminator
-            loss['prior_encoder_loss'].backward(inputs=param_encoder, retain_graph=True)
-            loss['grad_resnet_p'] = resnet341[0].weight.grad.abs().max()
-            opt_encoder.step()
-
-            # optimize global discriminator
-            infomax.zero_grad()
-            opt_global_discriminator.zero_grad()
-            loss['global_discriminator_loss'].backward(inputs=list(global_loss.parameters()),
-                    retain_graph=True)
-            loss['grad_global_disc'] = global_loss.layer0.weight.grad.abs().max()
-            opt_global_discriminator.step()
-
-            # optimize local discriminator
-            infomax.zero_grad()
-            opt_local_discriminator.zero_grad()
-            loss['local_discriminator_loss'].backward(inputs=list(local_loss.parameters()))
-            loss['grad_local_disc'] = local_loss.layer0.weight.grad.abs().max()
-            opt_local_discriminator.step()
-
-            # optimize prior discriminator
-            opt_prior_discriminator.zero_grad()
-            loss['prior_discriminator_loss'].backward(inputs=list(prior_disc.parameters()))
-            opt_prior_discriminator.step()
-
-            util.update_average(average, t, {k: v.detach().item() for (k, v) in loss.items()})
-
-            if i % 20 == 0:
+            if i % 50 == 0:
                 print()
                 print('batch ', i)
                 print(average)
@@ -170,17 +141,19 @@ def main():
 
             if i and i % 200 == 0:
                 print({k: v.item() for k, v in loss.items()})
-                state_dict = {'resnet': resnet341.state_dict(),
-                               'aggregator': aggregator.state_dict(),
-                               'discriminator_local': local_loss.state_dict(),
-                               'discriminator_global': global_loss.state_dict(),
-                               'discriminator_prior':  prior_disc.state_dict(),
-                               }
+                if not only_class:
+                    state_dict = {'resnet': resnet341.state_dict(),
+                                   'aggregator': aggregator.state_dict(),
+                                   'discriminator_local': local_loss.state_dict(),
+                                   'discriminator_global': global_loss.state_dict(),
+                                   'discriminator_prior':  prior_disc.state_dict(),
+                                   }
                 # save
-                torch.save(state_dict, snapshot_path)
+                    torch.save(state_dict, snapshot_path)
                 torch.save(tiny_class.state_dict(), 'tiny.pt')
 
 #        dataset.reset()
 
 if __name__ == '__main__':
    main()
+

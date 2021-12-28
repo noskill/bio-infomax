@@ -18,3 +18,23 @@ class TinyClass(nn.Module):
         x = self.relu(self.bn1(self.layer1(x)))
         return torch.nn.functional.log_softmax(self.layer2(x), dim=1)
 
+
+class TinyConv(nn.Module):
+    def __init__(self, conv_in, n_out):
+        super().__init__()
+        mid = 256
+        self.conv1 = nn.Conv2d(conv_in, mid, 2, 1)
+        self.conv2 = nn.Conv2d(conv_in, mid, 2, 1)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.activation = nn.ReLU()
+        self.layer3 = nn.Linear(mid, mid * 10)
+        self.layer4 = nn.Linear(mid * 10, n_out)
+
+    def forward(self, M):
+        x = self.activation(self.conv1(M))
+        x = self.activation(self.conv2(x))
+        x = self.pool(x).squeeze()
+        x = self.activation(self.layer3(x))
+        x = self.layer4(x)
+        return torch.nn.functional.log_softmax(x, dim=1)
+
