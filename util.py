@@ -1,4 +1,12 @@
 import cv2
+import torch
+
+
+def init_weights(m):
+    if hasattr(m, 'weight'):
+        nn.init.xavier_uniform(m.weight)
+    if hasattr(m, 'bias'):
+        m.bias.fill_(0.01)
 
 
 # adapted from https://github.com/PyImageSearch/imutils
@@ -46,4 +54,12 @@ def update_average(result, t, new):
             mean = result[k]
         result[k] = iterative_mean(mean, t, v)
     return result
+
+
+def to_categorical(y, num_columns):
+    """Returns one-hot encoded Variable"""
+    y_cat = torch.zeros((y.shape[0], num_columns))
+    y_cat[range(y.shape[0]), y] = 1.0
+
+    return y_cat
 

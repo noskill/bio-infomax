@@ -2,6 +2,7 @@ import numpy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from util import init_weights
 
 
 def shift1(Y):
@@ -22,6 +23,7 @@ class LocalDiscriminator(nn.Module):
         # encoder for matrix M
         self.conv1 = nn.Conv2d(conv_in, 2048, 1, 1)
         self.conv2 = nn.Conv2d(conv_in, 2048, 1, 1)
+        init_weights(self)
 
     def _forward(self, M, Y):
         # implementation follows the one from article
@@ -57,16 +59,21 @@ class LocalDiscriminator(nn.Module):
 
 
 class PriorDiscriminator(nn.Module):
-    def __init__(self, y_size):
+    def __init__(self, y_size, bn=True):
         super().__init__()
         # small fully connected network
         mid = 2048
         self.layer0 = nn.Linear(y_size, mid)
-        self.bn0 = nn.BatchNorm1d(mid)
         self.layer1 = nn.Linear(mid, mid)
-        self.bn1 = nn.BatchNorm1d(mid)
+        if bn:
+            self.bn0 = nn.BatchNorm1d(mid)
+            self.bn1 = nn.BatchNorm1d(mid)
+        else:
+            self.bn0 = lambda x: x
+            self.bn1 = lambda x: x
         self.layer2 = nn.Linear(mid, 1)
         self.relu = nn.LeakyReLU()
+        init_weights(self)
 
     def _forward(self, x):
         x = self.relu(self.bn0(self.layer0(x)))
@@ -81,8 +88,10 @@ class PriorDiscriminator(nn.Module):
         prior = self._forward(prior_x)
         eps = 0.000001
         # that's for encoder only!
+        # maximize empirical
         encoder_loss = - torch.log(empirical + eps).mean()
         # discriptor should classify empirical as fake
+        # so minimize empirical and maximize prior
         disc_loss = - torch.log(1 - empirical + eps).mean() - torch.log(prior + eps).mean()
         return dict(prior_encoder_loss=encoder_loss,
                     prior_emp=empirical.mean(),
@@ -99,6 +108,7 @@ class LocalDiscriminatorConv(nn.Module):
         self.layer0 = nn.Conv2d(conv_in + y_size, mid, 1, 1)
         self.conv2 = nn.Conv2d(mid, mid, 1, 1)
         self.conv3 = nn.Conv2d(mid, 1, 1, 1)
+        init_weights(self)
 
     def _forward(self, M, Y):
         Y = torch.repeat_interleave(Y.unsqueeze(2), M.shape[2], dim=2)
@@ -134,6 +144,7 @@ class GlobalDiscriminatorFull(nn.Module):
         self.layer0 = nn.Linear(input_size, 512)
         self.layer1 = nn.Linear(512, 512)
         self.layer2 = nn.Linear(512, 1)
+        init_weights(self)
 
     def _forward(self, M, Y):
         # flatten M and concatenate, then pass through layers
@@ -170,7 +181,7 @@ class GlobalDiscriminatorFull(nn.Module):
 
 class InfoMax(nn.Module):
     def __init__(self, feature_network,
-                      aggregator_network, *losses):
+                      aggregator_network, losses):
         super().__init__()
         self.feature_network = feature_network
         self.aggregator_network = aggregator_network
@@ -187,12 +198,12 @@ class InfoMax(nn.Module):
         M = self.feature_network(batch)
         Y = self.aggregator_network(M)
         result = dict()
-        for loss in self.losses:
+        for loss in self.losses.values():
             l = loss(M, Y)
             for k, v in l.items():
                 if k in result:
                     result[k] += v
                 else:
                     result[k] = v
-        return result, Y
+        return result, M, Y
 
